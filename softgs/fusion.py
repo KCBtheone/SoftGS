@@ -43,11 +43,16 @@ def fuse_source(
         raise ValueError(
             "The source camera file has no views or an invalid horizontal field of view."
         )
-    image_path = transforms_path.parent / Path(frames[0]["file_path"])
-    if not image_path.suffix:
-        image_path = image_path.with_suffix(".png")
-    with Image.open(image_path) as image:
-        original_width, original_height = image.size
+    if "w" in metadata and "h" in metadata:
+        original_width, original_height = int(metadata["w"]), int(metadata["h"])
+    else:
+        image_path = transforms_path.parent / Path(frames[0]["file_path"])
+        if not image_path.suffix:
+            image_path = image_path.with_suffix(".png")
+        with Image.open(image_path) as image:
+            original_width, original_height = image.size
+    if min(original_width, original_height) <= 0:
+        raise ValueError("Source image dimensions must be positive.")
     ratio = min(1.0, image_limit / max(original_width, original_height))
     width = max(1, round(ratio * original_width))
     height = max(1, round(ratio * original_height))

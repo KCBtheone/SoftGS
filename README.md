@@ -32,9 +32,9 @@ Render the edited PLY with your 3DGS renderer at the desired cameras. For anothe
 
 | Split | Source | Evaluation |
 | --- | --- | --- |
-| Single | Eight scenes adapted from [NeuralEditor](https://immortalco.github.io/NeuralEditor/) | One edit per scene, 90 target views each, full-image RGB metrics on white |
+| Single | Eight scenes adapted from NeuralEditor | One edit per scene, 90 target views each, full-image RGB metrics on white |
 | Multi | Four objects with Blender lattice deformations | Fifteen edits, 75 target views each, target-foreground RGB metrics at native resolution |
 
 Both splits use corresponding 3D control points at 16, 32, 64 and 128 points. Silhouette IoU thresholds predicted opacity and target alpha at 0.5. The paper averages views within each edit, then weights edits equally within each split.
 
-The [earlier SoftBench archive](https://huggingface.co/KCB1/softgs/blob/main/SoftBench.tar.gz) contains an earlier Multi data layout. Reproducing the current benchmark requires the corresponding source checkpoints and integration grids, prepared control pairs, source and target camera files, target RGB and alpha, and the split-specific evaluation protocol.
+The [SoftBench dataset repository](https://huggingface.co/datasets/KCB1/SoftBench) provides the prepared splits, including source checkpoints and integration grids, control pairs, cameras, target RGB and alpha, and the split-specific evaluation protocol.
