@@ -11,7 +11,7 @@ import numpy as np
 from .atlas import build_atlas, check_cover
 from .basis import evaluate
 from .fusion import fuse_source
-from .model import read_model, sample_support, sh_degree, write_model
+from .model import read_model, sample_support, write_model
 from .solve import gaussian_measure, integrate, prepare_response, quadrature
 from .transport import transport
 
@@ -73,6 +73,7 @@ def write_output(path, writer):
 
 def build(args):
     model, positions, scales, rotation = read_model(args.model)
+    vertices = model["vertex"].data
     source = point_pairs(args.source)
     if len(source) < 4:
         raise ValueError(
@@ -86,11 +87,12 @@ def build(args):
         if surface is None:
             surface = Path(scratch) / "surface.ply"
             fuse_source(
-                args.model,
+                positions,
+                scales,
+                vertices,
                 args.cameras,
                 surface,
                 diagonal,
-                sh_degree(model["vertex"].data),
                 view_count=args.source_views,
                 image_limit=args.image_limit,
                 voxels=args.voxels,
@@ -98,9 +100,7 @@ def build(args):
         atlas = build_atlas(
             surface, args.charts_per_diagonal, args.support_spacings, args.fit_spacings
         )
-    measure = source_measure(
-        args, positions, scales, model["vertex"].data["opacity"], source
-    )
+    measure = source_measure(args, positions, scales, vertices["opacity"], source)
     sites, volume, density = quadrature(*measure)
     check_cover(atlas, positions, "Gaussian center")
     check_cover(atlas, source, "source control")
@@ -215,7 +215,7 @@ def main():
     geometry = prepare.add_mutually_exclusive_group(required=True)
     geometry.add_argument("--surface", type=Path, help="Source TSDF mesh")
     geometry.add_argument(
-        "--cameras", type=Path, help="Source Blender transforms JSON for TSDF fusion"
+        "--cameras", type=Path, help="Source Blender camera JSON for 3DGS depth fusion"
     )
     prepare.add_argument(
         "--source", type=Path, required=True, help="Ordered source controls (.npy)"

@@ -1,19 +1,19 @@
-"""Fuse expected depths rendered from source cameras into a TSDF mesh."""
+"""Fuse standard 3DGS depth maps from source cameras into a TSDF mesh."""
 
 import json
 import math
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
 
 def fuse_source(
-    model_path,
+    positions,
+    log_scales,
+    vertices,
     transforms_path,
     out,
     diagonal,
-    degree,
     *,
     view_count=64,
     image_limit=512,
@@ -23,18 +23,20 @@ def fuse_source(
     import torch
     from PIL import Image
 
-    try:
-        from gaussian_renderer import render
-        from scene.gaussian_model import GaussianModel
-        from utils.graphics_utils import getProjectionMatrix
-    except ImportError as exc:
-        raise ValueError(
-            "Source TSDF fusion requires PGSR and its built CUDA rasterizer."
-        ) from exc
     if not torch.cuda.is_available():
         raise ValueError(
             "Source TSDF fusion requires CUDA. Supply --surface to use a fused mesh."
         )
+    try:
+        from diff_gaussian_rasterization import (
+            GaussianRasterizationSettings,
+            GaussianRasterizer,
+        )
+    except ImportError as exc:
+        raise ValueError(
+            "Source TSDF fusion requires Graphdeco's 3DGS CUDA rasterizer "
+            "(diff-gaussian-rasterization)."
+        ) from exc
     with transforms_path.open(encoding="utf-8") as stream:
         metadata = json.load(stream)
     frames = metadata["frames"]
@@ -59,27 +61,51 @@ def fuse_source(
     focal = 0.5 * original_width / math.tan(angle / 2)
     fx = focal * width / original_width
     fy = focal * height / original_height
-    fovx, fovy = 2 * math.atan(width / (2 * fx)), 2 * math.atan(height / (2 * fy))
     intrinsics = o3d.camera.PinholeCameraIntrinsic(
         width, height, fx, fy, width / 2, height / 2
     )
-    projection = getProjectionMatrix(
-        znear=0.01, zfar=1000.0, fovX=fovx, fovY=fovy
-    ).T.cuda()
+    tanfovx, tanfovy = width / (2 * fx), height / (2 * fy)
+    near, far = 0.01, 1000.0
+    device = torch.device("cuda")
+    projection = torch.zeros((4, 4), dtype=torch.float32, device=device)
+    # Graphdeco's rasterizer reads the transposed view and projection matrices.
+    projection[0, 0] = 1 / tanfovx
+    projection[1, 1] = 1 / tanfovy
+    projection[2, 2] = far / (far - near)
+    projection[2, 3] = 1
+    projection[3, 2] = -far * near / (far - near)
     voxel_size = diagonal / voxels
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=voxel_size,
         sdf_trunc=4 * voxel_size,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
     )
-    model = GaussianModel(sh_degree=degree)
-    model.load_ply(str(model_path))
-    pipeline = SimpleNamespace(
-        compute_cov3D_python=False, convert_SHs_python=False, debug=False
+    means3d = torch.as_tensor(positions, dtype=torch.float32, device=device)
+    means2d = torch.zeros_like(means3d)
+    scales = torch.as_tensor(log_scales, dtype=torch.float32, device=device).exp()
+    quaternions = np.column_stack([vertices[f"rot_{i}"] for i in range(4)])
+    rotations = torch.nn.functional.normalize(
+        torch.as_tensor(quaternions, dtype=torch.float32, device=device), dim=1
     )
-    background = torch.zeros(3, device="cuda")
-    colors = torch.zeros((len(model.get_xyz), 3), device="cuda")
+    opacities = torch.as_tensor(
+        vertices["opacity"].copy(), dtype=torch.float32, device=device
+    ).sigmoid()[:, None]
+    colors = torch.zeros_like(means3d)
     colors[:, 1] = 1
+    raster_options = dict(
+        image_width=width,
+        image_height=height,
+        tanfovx=tanfovx,
+        tanfovy=tanfovy,
+        bg=torch.zeros(3, dtype=torch.float32, device=device),
+        scale_modifier=1.0,
+        sh_degree=0,
+        prefiltered=False,
+        debug=False,
+    )
+    # The 3DGS antialiasing build exposes the option; the original build does not.
+    if "antialiasing" in GaussianRasterizationSettings._fields:
+        raster_options["antialiasing"] = False
     dummy_rgb = o3d.geometry.Image(np.zeros((height, width, 3), dtype=np.uint8))
     chosen = np.linspace(0, len(frames) - 1, min(view_count, len(frames)), dtype=int)
     with torch.inference_mode():
@@ -89,32 +115,27 @@ def fuse_source(
                 raise ValueError(f"Invalid transform in source frame {frame_index}.")
             c2w[:3, 1:3] *= -1  # Blender camera axes to positive-z camera axes.
             w2c = np.linalg.inv(c2w)
-            view = torch.as_tensor(w2c.T, dtype=torch.float32, device="cuda")
-            camera = SimpleNamespace(
-                FoVx=fovx,
-                FoVy=fovy,
-                image_width=width,
-                image_height=height,
-                world_view_transform=view,
-                full_proj_transform=view @ projection,
-                camera_center=torch.as_tensor(
-                    c2w[:3, 3], dtype=torch.float32, device="cuda"
-                ),
+            view = torch.as_tensor(w2c.T.copy(), dtype=torch.float32, device=device)
+            settings = GaussianRasterizationSettings(
+                viewmatrix=view,
+                projmatrix=view @ projection,
+                campos=torch.as_tensor(c2w[:3, 3], dtype=torch.float32, device=device),
+                **raster_options,
             )
-            # Render the weighted depth and the coverage with the same splats.
-            colors[:, 0] = model.get_xyz @ view[:3, 2] + view[3, 2]
-            render_result = render(
-                camera,
-                model,
-                pipeline,
-                background,
-                override_color=colors,
-                return_plane=False,
-                return_depth_normal=False,
-            )["render"]
-            alpha = render_result[1]
-            depth = (render_result[0] / alpha.clamp_min(1e-8)).cpu().numpy()
-            valid = (alpha.cpu().numpy() > 0.5) & np.isfinite(depth) & (depth > 0)
+            # Linear color channels accumulate weighted view-space z and coverage.
+            colors[:, 0] = means3d @ view[:3, 2] + view[3, 2]
+            render, *_ = GaussianRasterizer(raster_settings=settings)(
+                means3D=means3d,
+                means2D=means2d,
+                opacities=opacities,
+                colors_precomp=colors,
+                scales=scales,
+                rotations=rotations,
+            )
+            weighted_depth, alpha = render[:2].cpu().numpy()
+            depth = np.zeros_like(weighted_depth)
+            np.divide(weighted_depth, alpha, out=depth, where=alpha > 0.5)
+            valid = np.isfinite(depth) & (depth > 0)
             if not valid.any():
                 continue
             depth[~valid] = 0

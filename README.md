@@ -22,7 +22,13 @@ softgs edit --model source.ply --operator operator.npz \
     --target target_points.npy --output edited.ply
 ```
 
-For source TSDF fusion from the PLY, install [PGSR](https://github.com/zju3dv/PGSR) with its CUDA rasterizer and make its repository importable in the same Python environment. Replace `--surface source_tsdf.ply` with `--cameras transforms_train.json`. The camera file uses Blender camera-to-world matrices and a horizontal field of view in radians. The first source image supplies the original resolution.
+To build the source TSDF from a standard 3DGS checkpoint, install the `diff-gaussian-rasterization` submodule of [Graphdeco 3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) in the same CUDA-enabled PyTorch environment. Run this from the 3DGS checkout after initializing its submodules.
+
+```sh
+python -m pip install --no-build-isolation ./submodules/diff-gaussian-rasterization
+```
+
+Replace `--surface source_tsdf.ply` with `--cameras transforms_train.json`. This renders opacity-weighted view-space depth from the source Gaussians and integrates the depth maps with Open3D. The camera file supplies Blender camera-to-world matrices, a horizontal field of view in radians, and image dimensions through `w` and `h` or the first referenced image.
 
 `softgs build --help` lists the view sampling, voxel resolution and chart parameters. The quadrature grid can be specified with `--grid-cells X Y Z`. For reproducing a run with an existing source integration grid, supply `--measure grid.npz` with `lower`, `width`, `spans` and `source_cell_measure_density`. The grid and its density are defined entirely in the canonical source frame. Existing source grids are needed to reproduce runs that used different grid settings from the CLI defaults.
 
@@ -37,4 +43,4 @@ Render the edited PLY with your 3DGS renderer at the desired cameras. For anothe
 
 Both splits use corresponding 3D control points at 16, 32, 64 and 128 points. Silhouette IoU thresholds predicted opacity and target alpha at 0.5. The paper averages views within each edit, then weights edits equally within each split.
 
-The [SoftBench dataset repository](https://huggingface.co/datasets/KCB1/SoftBench) provides the prepared splits, including source checkpoints and integration grids, control pairs, cameras, target RGB and alpha, and the split-specific evaluation protocol.
+The [SoftBench dataset repository](https://huggingface.co/datasets/KCB1/SoftBench) provides source checkpoints, cached TSDF meshes and integration grids, control pairs, cameras, target RGB and alpha, and the split-specific evaluation protocol. Use the packaged mesh with `--surface` and the packaged grid with `--measure` to reproduce the benchmark setup.
