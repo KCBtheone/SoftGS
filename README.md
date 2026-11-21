@@ -1,6 +1,14 @@
 # SoftGS
 
-SoftGS edits Gaussian splats from ordered pairs of 3D control points. It fits bicubic charts to a source TSDF surface, solves for a smoothly blended displacement field with hard control constraints, and transports Gaussian centers, covariances and spherical harmonics. The source operator can be reused for new target locations of the same controls.
+**A Structured Gaussian Representation for Controllable Non-Rigid Editing**
+
+SoftGS edits a scene that has already been reconstructed with 3D Gaussian Splatting (3DGS). To bend, twist, or stretch the scene, a user specifies where a few 3D points should move. SoftGS propagates those motions through the scene and exports an edited 3DGS checkpoint that can be rendered from new viewpoints.
+
+- **Precise point control.** SoftGS fits overlapping bicubic Bézier charts to the source surface and minimizes bending energy with the supplied point pairs as hard constraints.
+- **Coherent shape and appearance.** A single continuous deformation moves the Gaussian centers. Its analytic Jacobian drives the local updates to Gaussian covariance and view-dependent appearance.
+- **Reusable, non-destructive edits.** SoftGS works on a pretrained checkpoint and writes each edit to a separate file. With a fixed source model and source control layout, one precomputed operator serves multiple target configurations.
+
+In the paper's SoftBench evaluation, SoftGS leads the compared methods on PSNR, SSIM, LPIPS, and silhouette IoU on both splits at all four tested control budgets.
 
 ## Install
 
